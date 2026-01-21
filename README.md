@@ -2,6 +2,8 @@
 
 A lightweight Rust library for bean management and dependency injection.
 
+> ⚠️ APIs are not stable yet; future releases may introduce breaking changes.
+
 ## Features
 
 - **Dependency Injection**: Automatic dependency resolution and injection
