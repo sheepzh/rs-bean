@@ -79,11 +79,11 @@ fn main() -> Result<(), String> {
     })?;
 
     println!("\n=== Get and use OrderService ===");
-    let order_service = container.get::<OrderService>()?;
+    let order_service = container.get::<OrderService>();
     order_service.create_order(1, "Laptop");
 
     println!("\n=== Get OrderService again (should reuse singleton) ===");
-    let order_service2 = container.get::<OrderService>()?;
+    let order_service2 = container.get::<OrderService>();
     order_service2.create_order(2, "Phone");
 
     println!("\n=== Verify same instance ===");

@@ -1,4 +1,4 @@
-use std::any::{Any, TypeId};
+use std::any::{Any, TypeId, type_name};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::{Arc, RwLock};
@@ -11,17 +11,34 @@ pub enum Scope {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Identifier {
-    Named(String),    // Named Bean
-    TypeSpec(TypeId), // Type-specific default Bean
-    Unnamed(TypeId),  // Unnamed temporary Bean (replaced by TypeSpec)
+    // Named Bean
+    Named(String),
+    // Type-specific default Bean
+    TypeSpec(TypeId, &'static str),
+    // Unnamed temporary Bean (replaced by TypeSpec)
+    Unnamed(TypeId, &'static str),
+}
+
+impl Identifier {
+    pub fn named(name: &str) -> Self {
+        Identifier::Named(name.to_string())
+    }
+
+    pub fn type_spec<T: 'static>() -> Self {
+        Identifier::TypeSpec(TypeId::of::<T>(), type_name::<T>())
+    }
+
+    pub fn unnamed<T: 'static>() -> Self {
+        Identifier::Unnamed(TypeId::of::<T>(), type_name::<T>())
+    }
 }
 
 impl Display for Identifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Identifier::Named(name) => write!(f, "Bean({})", name),
-            Identifier::TypeSpec(type_id) => write!(f, "Bean({:?})", type_id),
-            Identifier::Unnamed(type_id) => write!(f, "Bean({:?})[unnamed]", type_id),
+            Identifier::TypeSpec(_, name) => write!(f, "Bean({})", name),
+            Identifier::Unnamed(_, name) => write!(f, "Bean({})[unnamed]", name),
         }
     }
 }
@@ -125,9 +142,8 @@ impl BeanContainer {
         T: Any + Send + Sync + 'static,
         F: Fn(&mut Dependencies) -> Result<T, String> + Send + Sync + 'static,
     {
-        let type_id = TypeId::of::<T>();
-        let type_spec_id = Identifier::TypeSpec(type_id);
-        let unnamed_id = Identifier::Unnamed(type_id);
+        let type_spec_id = Identifier::type_spec::<T>();
+        let unnamed_id = Identifier::unnamed::<T>();
 
         let bean_factory: Arc<dyn BeanFactory> = Arc::new(move |deps: &mut Dependencies| {
             let instance = factory(deps)?;
@@ -144,7 +160,7 @@ impl BeanContainer {
 
         // If TypeSpec exists, throw error
         if beans.contains_key(&type_spec_id) {
-            return Err(format!("Bean already registered for type: {:?}", type_id));
+            return Err(format!("Bean already registered: {}", &type_spec_id));
         }
         // If unnamed exists, remove it
         beans.remove(&unnamed_id);
@@ -159,10 +175,9 @@ impl BeanContainer {
         T: Any + Send + Sync + 'static,
         F: Fn(&mut Dependencies) -> Result<T, String> + Send + Sync + 'static,
     {
-        let type_id = TypeId::of::<T>();
-        let named_id = Identifier::Named(name.to_string());
-        let type_spec_id = Identifier::TypeSpec(type_id);
-        let unnamed_id = Identifier::Unnamed(type_id);
+        let named_id = Identifier::named(name);
+        let type_spec_id = Identifier::type_spec::<T>();
+        let unnamed_id = Identifier::unnamed::<T>();
 
         let bean_factory: Arc<dyn BeanFactory> = Arc::new(move |deps: &mut Dependencies| {
             let instance = factory(deps)?;
@@ -199,16 +214,18 @@ impl BeanContainer {
     }
 
     /// Get bean by type
-    pub fn get<T: Any + Send + Sync + 'static>(&self) -> Result<Arc<T>, String> {
-        self.get_inner::<T>(None)
+    /// **NOTE**: panics if bean not found
+    pub fn get<T: Any + Send + Sync + 'static>(&self) -> Arc<T> {
+        self.try_get::<T>(None).unwrap()
     }
 
     /// Get named bean by type
-    pub fn get_named<T: Any + Send + Sync + 'static>(&self, name: &str) -> Result<Arc<T>, String> {
-        self.get_inner::<T>(Some(name))
+    /// **NOTE**: panics if bean not found
+    pub fn get_named<T: Any + Send + Sync + 'static>(&self, name: &str) -> Arc<T> {
+        self.try_get::<T>(Some(name)).unwrap()
     }
 
-    fn get_inner<T: Any + Send + Sync + 'static>(
+    fn try_get<T: Any + Send + Sync + 'static>(
         &self,
         name: Option<&str>,
     ) -> Result<Arc<T>, String> {
@@ -221,15 +238,13 @@ impl BeanContainer {
         name: Option<&str>,
         context: &mut CreationContext,
     ) -> Result<Arc<T>, String> {
-        let type_id = TypeId::of::<T>();
-
         // Determine the key to look up
         let id = if let Some(n) = name {
-            Identifier::Named(n.to_string())
+            Identifier::named(n)
         } else {
             // Prefer TypeSpec, then Unnamed
-            let type_spec_id = Identifier::TypeSpec(type_id);
-            let unnamed_id = Identifier::Unnamed(type_id);
+            let type_spec_id = Identifier::type_spec::<T>();
+            let unnamed_id = Identifier::unnamed::<T>();
 
             let beans = self.beans.read().unwrap();
             if beans.contains_key(&type_spec_id) {
@@ -237,7 +252,7 @@ impl BeanContainer {
             } else if beans.contains_key(&unnamed_id) {
                 unnamed_id
             } else {
-                return Err(format!("Bean not found for type: {:?}", type_id));
+                return Err(format!("Bean not found: {}", type_spec_id));
             }
         };
 
@@ -303,14 +318,13 @@ impl BeanContainer {
 
     /// Check if the container contains the specified bean
     pub fn contains<T: Any + Send + Sync + 'static>(&self, name: Option<&str>) -> bool {
-        let type_id = TypeId::of::<T>();
         let beans = self.beans.read().unwrap();
 
         if let Some(n) = name {
             beans.contains_key(&Identifier::Named(n.to_string()))
         } else {
-            beans.contains_key(&Identifier::TypeSpec(type_id))
-                || beans.contains_key(&Identifier::Unnamed(type_id))
+            beans.contains_key(&Identifier::type_spec::<T>())
+                || beans.contains_key(&Identifier::unnamed::<T>())
         }
     }
 
